@@ -323,13 +323,17 @@ static void promisor_info_vecs(struct repository *repo,
 	promisor_remote_init(repo);
 
 	for (r = repo->promisor_remote_config->promisors; r; r = r->next) {
-		char *url;
+		const char *url;
 		char *url_key = xstrfmt("remote.%s.url", r->name);
 
 		strvec_push(names, r->name);
-		strvec_push(urls, git_config_get_string(url_key, &url) ? NULL : url);
 
-		free(url);
+		/*
+		 * No URL defaults to the name of the remote, like elsewhere
+		 * in Git (e.g. `git fetch` or `git remote get-url`).
+		 */
+		strvec_push(urls, git_config_get_string_tmp(url_key, &url) ? r->name : url);
+
 		free(url_key);
 	}
 }
@@ -356,7 +360,7 @@ char *promisor_remote_info(struct repository *repo)
 			strbuf_addch(&sb, ';');
 		strbuf_addstr(&sb, "name=");
 		strbuf_addstr_urlencode(&sb, names.v[i], allow_unsanitized);
-		if (urls.v[i]) {
+		if (*urls.v[i]) {
 			strbuf_addstr(&sb, ",url=");
 			strbuf_addstr_urlencode(&sb, urls.v[i], allow_unsanitized);
 		}
@@ -409,11 +413,41 @@ static int should_accept_remote(enum accept_promisor accept,
 	if (accept != ACCEPT_KNOWN_URL)
 		BUG("Unhandled 'enum accept_promisor' value '%d'", accept);
 
+	if (!remote_url) {
+		warning(_("no URL advertised for remote '%s'"), remote_name);
+		return 0;
+	}
+
+	if (!*remote_url) {
+		/*
+		 * This shouldn't happen with a Git server, but not
+		 * sure how other servers will be implemented in the
+		 * future.
+		 */
+		warning(_("empty URL advertised for remote '%s'"), remote_name);
+		return 0;
+	}
+
+	if (!*urls->v[i]) {
+		warning(_("empty URL configured for remote '%s'"), remote_name);
+		return 0;
+	}
+
 	if (!strcmp(urls->v[i], remote_url))
 		return 1;
 
-	warning(_("known remote named '%s' but with url '%s' instead of '%s'"),
+	warning(_("known remote named '%s' but with URL '%s' instead of '%s'"),
 		remote_name, urls->v[i], remote_url);
+
+	if (!strcasecmp(remote_name, urls->v[i]))
+		warning(_("remote name and URL are the same '%s', "
+			  "maybe the URL is not configured locally"),
+			remote_name);
+
+	if (!strcmp(remote_name, remote_url))
+		warning(_("remote name and URL are the same '%s', "
+			  "maybe the URL is not configured on the remote side"),
+			remote_name);
 
 	return 0;
 }
